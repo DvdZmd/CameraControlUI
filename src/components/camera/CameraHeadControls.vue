@@ -11,6 +11,8 @@ import {
   type MoveDirection,
 } from '../../services/esp32Api'
 
+const HOLD_DELAY_MS = 250
+
 const isConnected = ref(false)
 const isBusy = ref(false)
 const isMoving = ref(false)
@@ -18,9 +20,28 @@ const activeDirection = ref<MoveDirection | null>(null)
 const errorMessage = ref('')
 const speedMode = ref(1)
 
+const pressedDirection = ref<MoveDirection | null>(null)
+const holdTimerId = ref<number | null>(null)
+const holdStarted = ref(false)
+const activePointerId = ref<number | null>(null)
+
 const connectionLabel = computed(() =>
   isConnected.value ? 'Connected' : 'Disconnected'
 )
+
+function clearHoldTimer() {
+  if (holdTimerId.value !== null) {
+    window.clearTimeout(holdTimerId.value)
+    holdTimerId.value = null
+  }
+}
+
+function resetPressState() {
+  clearHoldTimer()
+  pressedDirection.value = null
+  holdStarted.value = false
+  activePointerId.value = null
+}
 
 async function refreshStatus() {
   try {
@@ -49,13 +70,24 @@ async function handleDisconnect() {
   try {
     isBusy.value = true
     errorMessage.value = ''
-    await stopMovement()
+    await stopMovement(true)
     await disconnectEsp32()
     await refreshStatus()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Failed to disconnect'
   } finally {
     isBusy.value = false
+  }
+}
+
+async function executeSingleStep(direction: MoveDirection) {
+  if (!isConnected.value || isBusy.value) return
+
+  try {
+    errorMessage.value = ''
+    await moveEsp32(direction)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Failed to move camera head'
   }
 }
 
@@ -71,13 +103,13 @@ async function startMovement(direction: MoveDirection) {
   } catch (error) {
     isMoving.value = false
     activeDirection.value = null
-    errorMessage.value = error instanceof Error ? error.message : 'Failed to move camera head'
+    errorMessage.value = error instanceof Error ? error.message : 'Failed to start continuous movement'
   }
 }
 
-async function stopMovement() {
+async function stopMovement(force = false) {
   if (!isConnected.value) return
-  if (!isMoving.value && !activeDirection.value) return
+  if (!force && !isMoving.value && !activeDirection.value) return
 
   try {
     await stopEsp32()
@@ -117,31 +149,111 @@ async function handleSpeedChange() {
   }
 }
 
-function bindPress(direction: MoveDirection) {
+function handlePointerDown(direction: MoveDirection, event: PointerEvent) {
+  if (!isConnected.value || isBusy.value) return
+
+  event.preventDefault()
+
+  activePointerId.value = event.pointerId
+  pressedDirection.value = direction
+  holdStarted.value = false
+
+  ;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
+
+  clearHoldTimer()
+  holdTimerId.value = window.setTimeout(() => {
+    if (pressedDirection.value !== direction) return
+
+    holdStarted.value = true
+    void startMovement(direction)
+  }, HOLD_DELAY_MS)
+}
+
+function isSamePointer(event: PointerEvent) {
+  return activePointerId.value === null || activePointerId.value === event.pointerId
+}
+
+async function handlePointerUp(event: PointerEvent) {
+  if (!isSamePointer(event)) return
+
+  event.preventDefault()
+
+  const direction = pressedDirection.value
+  const shouldSingleStep = !holdStarted.value && direction !== null
+
+  ;(event.currentTarget as HTMLElement | null)?.releasePointerCapture?.(event.pointerId)
+
+  resetPressState()
+
+  if (shouldSingleStep && direction) {
+    await executeSingleStep(direction)
+    return
+  }
+
+  if (isMoving.value) {
+    await stopMovement()
+  }
+}
+
+async function handlePointerCancel(event?: PointerEvent) {
+  if (event && !isSamePointer(event)) return
+
+  resetPressState()
+
+  if (isMoving.value) {
+    await stopMovement(true)
+  }
+}
+
+function bindDirectionalControl(direction: MoveDirection) {
   return {
-    mousedown: () => startMovement(direction),
-    mouseup: () => stopMovement(),
-    mouseleave: () => stopMovement(),
-    touchstart: (event: TouchEvent) => {
-      event.preventDefault()
-      startMovement(direction)
+    pointerdown: (event: PointerEvent) => handlePointerDown(direction, event),
+    pointerup: (event: PointerEvent) => void handlePointerUp(event),
+    pointercancel: (event: PointerEvent) => void handlePointerCancel(event),
+    pointerleave: (event: PointerEvent) => {
+      if (holdStarted.value) {
+        void handlePointerCancel(event)
+      }
     },
-    touchend: () => stopMovement(),
-    touchcancel: () => stopMovement(),
+    contextmenu: (event: MouseEvent) => event.preventDefault(),
+  }
+}
+
+function handleWindowPointerUp() {
+  resetPressState()
+
+  if (isMoving.value) {
+    void stopMovement(true)
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) {
+    resetPressState()
+
+    if (isMoving.value) {
+      void stopMovement(true)
+    }
   }
 }
 
 onMounted(() => {
-  refreshStatus()
+  void refreshStatus()
 
-  window.addEventListener('mouseup', stopMovement)
-  window.addEventListener('touchend', stopMovement)
+  window.addEventListener('pointerup', handleWindowPointerUp)
+  window.addEventListener('blur', handleWindowPointerUp)
+  window.addEventListener('pagehide', handleWindowPointerUp)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('mouseup', stopMovement)
-  window.removeEventListener('touchend', stopMovement)
-  stopMovement()
+  window.removeEventListener('pointerup', handleWindowPointerUp)
+  window.removeEventListener('blur', handleWindowPointerUp)
+  window.removeEventListener('pagehide', handleWindowPointerUp)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+
+  resetPressState()
+  void stopMovement(true)
 })
 </script>
 
@@ -203,7 +315,7 @@ onBeforeUnmount(() => {
         type="button"
         class="control-btn up"
         :disabled="!isConnected || isBusy"
-        v-on="bindPress('up')"
+        v-on="bindDirectionalControl('up')"
       >
         Up
       </button>
@@ -212,7 +324,7 @@ onBeforeUnmount(() => {
         type="button"
         class="control-btn left"
         :disabled="!isConnected || isBusy"
-        v-on="bindPress('left')"
+        v-on="bindDirectionalControl('left')"
       >
         Left
       </button>
@@ -230,7 +342,7 @@ onBeforeUnmount(() => {
         type="button"
         class="control-btn right"
         :disabled="!isConnected || isBusy"
-        v-on="bindPress('right')"
+        v-on="bindDirectionalControl('right')"
       >
         Right
       </button>
@@ -239,7 +351,7 @@ onBeforeUnmount(() => {
         type="button"
         class="control-btn down"
         :disabled="!isConnected || isBusy"
-        v-on="bindPress('down')"
+        v-on="bindDirectionalControl('down')"
       >
         Down
       </button>
