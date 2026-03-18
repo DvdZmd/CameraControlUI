@@ -65,7 +65,6 @@ export async function disconnectEsp32(): Promise<ApiResponse> {
 }
 
 export async function moveEsp32(direction: MoveDirection): Promise<ApiResponse> {
-  //alert("123");
   return request<ApiResponse>('/api/esp32/move', {
     method: 'POST',
     body: JSON.stringify({

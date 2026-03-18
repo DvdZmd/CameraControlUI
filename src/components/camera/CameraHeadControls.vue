@@ -9,7 +9,7 @@ import {
   setEsp32Speed,
   stopEsp32,
   type MoveDirection,
-} from '../../services/esp32Api'
+} from '@/services/esp32Api'
 
 const isConnected = ref(false)
 const isBusy = ref(false)
@@ -60,6 +60,7 @@ async function handleDisconnect() {
 }
 
 async function startMovement(direction: MoveDirection) {
+  //alert("123");
   if (!isConnected.value || isBusy.value) return
   if (isMoving.value && activeDirection.value === direction) return
 
@@ -76,6 +77,7 @@ async function startMovement(direction: MoveDirection) {
 }
 
 async function stopMovement() {
+  //alert("abc");
   if (!isConnected.value) return
   if (!isMoving.value && !activeDirection.value) return
 
@@ -117,8 +119,23 @@ async function handleSpeedChange() {
   }
 }
 
+async function handleStep(direction: MoveDirection) {
+  if (!isConnected.value || isBusy.value) return;
+
+  try {
+    errorMessage.value = '';
+    isBusy.value = true; // Evita spam mientras se procesa la petición
+    await moveEsp32(direction);
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Error al mover';
+  } finally {
+    isBusy.value = false;
+  }
+}
+
 function bindPress(direction: MoveDirection) {
   return {
+
     mousedown: () => startMovement(direction),
     mouseup: () => stopMovement(),
     mouseleave: () => stopMovement(),
@@ -195,6 +212,7 @@ onBeforeUnmount(() => {
         <option :value="1">1</option>
         <option :value="2">2</option>
         <option :value="3">3</option>
+        <option :value="4">4</option>
       </select>
     </div>
 
@@ -203,7 +221,7 @@ onBeforeUnmount(() => {
         type="button"
         class="control-btn up"
         :disabled="!isConnected || isBusy"
-        v-on="bindPress('up')"
+        @click="handleStep('up')"
       >
         Up
       </button>
@@ -212,7 +230,7 @@ onBeforeUnmount(() => {
         type="button"
         class="control-btn left"
         :disabled="!isConnected || isBusy"
-        v-on="bindPress('left')"
+        @click="handleStep('left')"
       >
         Left
       </button>
@@ -230,7 +248,7 @@ onBeforeUnmount(() => {
         type="button"
         class="control-btn right"
         :disabled="!isConnected || isBusy"
-        v-on="bindPress('right')"
+        @click="handleStep('right')"
       >
         Right
       </button>
@@ -239,7 +257,7 @@ onBeforeUnmount(() => {
         type="button"
         class="control-btn down"
         :disabled="!isConnected || isBusy"
-        v-on="bindPress('down')"
+        @click="handleStep('down')"
       >
         Down
       </button>
