@@ -1,0 +1,15 @@
+[Unit]
+Description=Camera Control UI (Vite)
+After=network.target
+
+[Service]
+Type=simple
+User=${CAMERACONTROL_UI_USER}
+WorkingDirectory=${CAMERACONTROL_UI_PATH}
+ExecStart=/usr/bin/npm run dev -- --host 0.0.0.0 --port 5173
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=development
+
+[Install]
+WantedBy=multi-user.target
